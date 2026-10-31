@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "ChatGPT 积压发送",
+  "version": "0.1.1",
+  "description": "ChatGPT 网页版：提前攒好后面几轮要发的消息，上一轮回复完自动发下一条。",
+  "content_scripts": [
+    {
+      "matches": ["https://chatgpt.com/*", "https://chat.openai.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
