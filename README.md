@@ -1,6 +1,8 @@
-# chatgpt-queue
+# ChatGPT Prompt Queue
 
-ChatGPT 网页版「积压发送」：提前攒好后面几轮要发的消息，上一轮回复完整生成完、停稳 2 秒后，自动发下一条。
+ChatGPT 网页版**排队发送**（prompt queue / queued messages）：提前排好后面几轮要发的消息，上一轮回复完整生成完、停稳 2 秒后，自动发下一条。
+
+和 Claude Code、Cursor 的 queued messages 是同一类功能；区别是这里严格等整轮回复结束才发下一条，不会插进正在进行的那一轮（那种叫 steer）。
 
 ## 安装（Chrome，一次性）
 

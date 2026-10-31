@@ -1,4 +1,4 @@
-// chatgpt-queue：ChatGPT 网页版积压发送。
+// ChatGPT Prompt Queue（排队发送）：ChatGPT 网页版消息排队。
 // 生成中按 Enter（或任何时候按 ⌥Enter）= 把输入框内容放进队列；
 // 上一轮回复完整生成完、停稳 2 秒后，自动发队列里的下一条。
 // 不用任何 chrome.* 接口，同一份代码也能直接注入页面跑。
@@ -190,7 +190,7 @@
     if (editing) return;                       // 正在编辑时不重绘
     box.className = minimized ? 'min' : '';
     const n = st.items.length;
-    let h = `<div class="hd"><span class="ttl">积压队列 ${n ? '· ' + n + ' 条' : ''}</span>
+    let h = `<div class="hd"><span class="ttl">排队发送 ${n ? '· ' + n + ' 条' : ''}</span>
       <span class="st">${statusText()}</span>
       ${n ? `<button data-a="pause">${st.paused ? '▶ 继续' : '⏸ 暂停'}</button>` : ''}
       <button data-a="min" title="${minimized ? '展开' : '收起'}">${minimized ? '▴' : '▾'}</button></div>`;
