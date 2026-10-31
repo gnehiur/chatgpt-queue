@@ -57,6 +57,27 @@
     const dt = new DataTransfer(); dt.setData('text/plain', text);
     c.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
   };
+  // 对话区里的红色出错条（Unknown error、网络断了、对话太长…）。出错时没有停止键，
+  // 光看「停止键消失」会以为回复完了，接着把后面几条也发进错误里（26-11-01 实测连丢 3 条）。
+  // 用户点 ▶ 继续时，把当时已有的出错条记下来，不再拦。
+  // （按文字记：ChatGPT 重绘出错条会换新节点。下一条成功发出去后清掉，同样的错再出现照样拦）
+  // 每轮开头有个读屏用的隐藏标题「你说：」/「ChatGPT 说：」，拿最后一个判断最后一轮是谁说的
+  const lastHead = () => {
+    const hs = [...document.querySelectorAll('main h4')].filter(h => /说：|said:/i.test(h.textContent));
+    return hs[hs.length - 1] || null;
+  };
+  const lastTurn = () => {
+    const h = lastHead(); if (!h) return null;
+    return { user: /^(你说|You said)/i.test(h.textContent.trim()), text: h.parentElement?.innerText || '' };
+  };
+  let ackedErr = new Set();
+  // 只看最后一轮之后的出错条，历史里留着的旧出错条不算
+  const alerts = () => {
+    const h = lastHead();
+    return [...document.querySelectorAll('main [role=alert]')].filter(e => e.offsetParent !== null && e.innerText.trim() &&
+      (!h || h.compareDocumentPosition(e) & Node.DOCUMENT_POSITION_FOLLOWING));
+  };
+  const errorBar = () => alerts().find(e => !ackedErr.has(e.innerText.trim()));
   const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   const waitFor = async (fn, ms) => { const t = Date.now(); while (Date.now() - t < ms) { if (fn()) return true; await sleep(100); } return false; };
 
@@ -91,6 +112,18 @@
 
   // ---------- 自动发送 ----------
   let idleSince = 0, sending = false, mismatch = false;
+  let trustOnce = false;   // 用户手动点 ▶ 后，下一条不查「上一条有没有回复」
+
+  // 出问题就停：暂停队列，写明原因；刚发的那条如果没收到回复，放回队首
+  const halt = (reason) => {
+    const t = lastTurn(), ls = st.lastSent;
+    if (ls && t?.user && t.text.includes(ls.text.trim().slice(0, 30)) && st.items[0]?.id !== ls.id) {
+      st.items.unshift({ ...ls, failed: true });
+      reason += '，这条已放回队首';
+    }
+    st.lastSent = null; st.paused = true; st.halt = reason; save();
+    toast(`${reason}，队列已暂停`, 6000);
+  };
   const tick = async () => {
     if (sending) return;
     const cur = convKey();
@@ -100,7 +133,10 @@
     if (!idleSince) idleSince = Date.now();
     render();
     if (st.paused || !st.items.length || mismatch) return;
+    const bar = errorBar();
+    if (bar) return halt(`页面报错「${bar.innerText.trim().split('\n')[0].slice(0, 40)}」`);
     if (Date.now() - idleSince < IDLE_MS) return;
+    if (!trustOnce && lastTurn()?.user) return halt('上一条没收到回复');
     await sendNext();
   };
 
@@ -117,13 +153,15 @@
       const gone = await waitFor(() => !composerText().trim() || stopShown(), 6000);
       if (!gone) throw new Error('点了发送但没发出去');
       st.items = st.items.filter(x => x.id !== item.id);
+      st.lastSent = { id: item.id, text: item.text };
+      trustOnce = false; ackedErr = new Set();
       if (!st.path) st.path = convKey();
       save();
-      await waitFor(stopShown, 15000);      // 等它开始生成，再进入下一轮判断
+      await waitFor(() => stopShown() || errorBar(), 15000);   // 等它开始生成（或报错），再进入下一轮判断
       await waitFor(() => convKey(), 5000);
       if (!st.path) { st.path = convKey(); save(); }
     } catch (err) {
-      st.paused = true; save();
+      st.paused = true; st.halt = err.message; save();
       if (composerText().trim() === item.text.trim()) clearComposer();
       toast(`${err.message}，队列已暂停`, 5000);
     } finally {
@@ -176,7 +214,7 @@
 
   function statusText() {
     if (mismatch) return '不在本对话';
-    if (st.paused) return '已暂停';
+    if (st.paused) return st.halt ? '出错暂停' : '已暂停';
     if (sending) return '发送中…';
     if (!st.items.length) return '空';
     if (isGenerating()) return '等回复完成';
@@ -197,8 +235,9 @@
     if (!minimized) {
       if (mismatch) h += `<div class="warn">这个队列是在另一个对话里攒的，当前对话不会自动发。
         <button data-a="adopt">改发到当前对话</button></div>`;
+      if (st.paused && st.halt) h += `<div class="warn">⚠ ${esc(st.halt)}。队列已暂停，看一眼对话，处理好后点 ▶ 继续。</div>`;
       h += `<div class="list">${n ? st.items.map((it, i) => `
-        <div class="it" data-id="${it.id}"><span class="n">${i + 1}</span><span class="tx">${esc(it.text)}</span>
+        <div class="it" data-id="${it.id}"><span class="n">${i + 1}</span><span class="tx">${it.failed ? '<b title="上次发出去没收到回复">⚠</b> ' : ''}${esc(it.text)}</span>
         <span class="ops"><button data-a="up" title="上移">↑</button><button data-a="edit" title="编辑">✎</button><button data-a="del" title="删除">✕</button></span></div>`).join('')
         : '<div class="tip" style="padding:6px">生成中按 Enter，或任何时候按 ⌥Enter，输入框内容就进队列；上一轮回复完了自动发下一条。</div>'}</div>
       <div class="ft"><span class="tip">⌥Enter 入队 · 生成中 Enter 也入队</span>
@@ -211,7 +250,14 @@
     const b = e.target.closest('button'); if (!b) return;
     const a = b.dataset.a, id = b.closest('.it')?.dataset.id;
     const idx = st.items.findIndex(x => x.id === id);
-    if (a === 'pause') { st.paused = !st.paused; idleSince = 0; save(); }
+    if (a === 'pause') {
+      st.paused = !st.paused; idleSince = 0;
+      if (!st.paused) {                        // 用户确认过了：眼前的出错条和「上一条没回复」都不再拦
+        alerts().forEach(e => ackedErr.add(e.innerText.trim()));
+        trustOnce = true; st.halt = null;
+      }
+      save();
+    }
     else if (a === 'min') { minimized = !minimized; sessionStorage.setItem('cgq-min', minimized ? '1' : '0'); render(); }
     else if (a === 'add') enqueueComposer();
     else if (a === 'clear') { if (confirm(`清空队列里的 ${st.items.length} 条？`)) { st.items = []; save(); } }
