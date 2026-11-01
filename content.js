@@ -10,21 +10,38 @@
   const IDLE_MS = 2000;      // 回复结束后要停稳多久才发下一条
   const TICK_MS = 500;
 
-  // ---------- 状态（按标签页存 sessionStorage，刷新不丢） ----------
-  const load = () => {
-    try { return JSON.parse(sessionStorage.getItem(KEY)) || null; } catch { return null; }
-  };
-  let st = load() || { path: null, items: [], paused: false };
-  const save = () => { sessionStorage.setItem(KEY, JSON.stringify(st)); render(); };
+  // ---------- 状态：每个对话一份队列（按标签页存 sessionStorage，刷新不丢） ----------
+  // 切到哪个对话，面板就显示哪个对话的队列、暂停和报错状态。
+  // 首页 / 新对话还没有 id 时记在 'new' 下，第一条发出去、地址换成真 id 后整份搬过去。
   // 新对话刚发第一条时地址是 /c/local-chatgpt:xxx，过一会儿才换成真 id，临时 id 不算
   const convKey = () => {
     const id = (decodeURIComponent(location.pathname).match(/\/c\/([^/]+)/) || [])[1] || null;
     return id && !id.startsWith('local') ? id : null;
   };
+  const load = () => {
+    try {
+      const o = JSON.parse(sessionStorage.getItem(KEY));
+      if (o && Array.isArray(o.items)) return o.items.length ? { [o.path || 'new']: o } : {};   // 0.1.3 及以前：一个标签页只有一份队列
+      return o || {};
+    } catch { return {}; }
+  };
+  const all = load();
+  const blank = () => ({ items: [], paused: false });
+  let curKey = convKey() || 'new';
+  let st = all[curKey] || blank();
+  const save = () => {
+    if (!st.items.length) { st.paused = false; st.halt = null; }   // 队列空了，暂停和报错提示一起清掉
+    if (st.items.length || st.lastSent) all[curKey] = st; else delete all[curKey];
+    delete st.path;
+    sessionStorage.setItem(KEY, JSON.stringify(all)); render();
+  };
 
   // ---------- 页面元素 ----------
-  const composer = () => document.querySelector('form .ProseMirror[contenteditable="true"]') ||
-                         document.querySelector('#prompt-textarea');
+  // 在侧栏切对话时，旧对话的输入框可能还藏在页面里没拆掉（实测同时有两个），只认看得见的那个
+  const composer = () => {
+    const cs = [...document.querySelectorAll('form .ProseMirror[contenteditable="true"], #prompt-textarea')];
+    return cs.filter(c => c.offsetParent !== null).pop() || cs.pop() || null;
+  };
   const form = () => composer()?.closest('form');
   const stopShown = () => {
     const f = form();
@@ -35,7 +52,8 @@
   // 刚发出去、停止键还没出来的那一两秒也算「在生成」：
   // 实测这时再按 Enter，ChatGPT 会把前一条吞掉，只留后一条。
   let submitAt = 0;
-  const markSubmit = () => { submitAt = Date.now(); };
+  let lastSubmitAt = 0;                     // 不清零，用来判断「新对话刚发出第一条」
+  const markSubmit = () => { submitAt = lastSubmitAt = Date.now(); };
   const isGenerating = () => {
     if (stopShown()) { submitAt = 0; return true; }
     return !!submitAt && Date.now() - submitAt < 8000;
@@ -84,7 +102,6 @@
   // ---------- 入队 ----------
   const enqueue = (text) => {
     text = text.trim(); if (!text) return false;
-    if (!st.items.length) st.path = convKey();
     st.items.push({ id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), text });
     save(); toast(`已加入队列，第 ${st.items.length} 条`);
     return true;
@@ -111,7 +128,7 @@
   }, true);
 
   // ---------- 自动发送 ----------
-  let idleSince = 0, sending = false, mismatch = false;
+  let idleSince = 0, sending = false;
   let trustOnce = false;   // 用户手动点 ▶ 后，下一条不查「上一条有没有回复」
 
   // 出问题就停：暂停队列，写明原因；刚发的那条如果没收到回复，放回队首
@@ -124,17 +141,26 @@
     st.lastSent = null; st.paused = true; st.halt = reason; save();
     toast(`${reason}，队列已暂停`, 6000);
   };
+  // 地址变了就换成那个对话的队列
+  const switchConv = () => {
+    const k = convKey() || 'new';
+    if (k === curKey) return;
+    if (curKey === 'new' && k !== 'new' && !all[k] && Date.now() - lastSubmitAt < 60000) {
+      delete all.new; curKey = k; save();     // 新对话发出第一条拿到真 id：队列跟着搬过去
+    } else { curKey = k; st = all[k] || blank(); }
+    ackedErr = new Set(); trustOnce = false; idleSince = 0; lastHtml = '';
+  };
   const tick = async () => {
     if (sending) return;
-    const cur = convKey();
-    if (st.items.length && !st.path && cur) { st.path = cur; save(); }
-    mismatch = !!(st.items.length && st.path && cur !== st.path);
+    switchConv();
     if (isGenerating() || !composer()) { idleSince = 0; render(); return; }
     if (!idleSince) idleSince = Date.now();
     render();
-    if (st.paused || !st.items.length || mismatch) return;
-    const bar = errorBar();
+    if (st.paused || !(st.items.length || st.lastSent)) return;
+    const bar = errorBar();     // 队列最后一条发出去出错也要抓到，好放回来
     if (bar) return halt(`页面报错「${bar.innerText.trim().split('\n')[0].slice(0, 40)}」`);
+    if (st.lastSent && lastTurn()?.user === false) { st.lastSent = null; save(); }   // 上一条已经有回复了
+    if (!st.items.length) return;
     if (Date.now() - idleSince < IDLE_MS) return;
     if (!trustOnce && lastTurn()?.user) return halt('上一条没收到回复');
     await sendNext();
@@ -155,11 +181,8 @@
       st.items = st.items.filter(x => x.id !== item.id);
       st.lastSent = { id: item.id, text: item.text };
       trustOnce = false; ackedErr = new Set();
-      if (!st.path) st.path = convKey();
       save();
       await waitFor(() => stopShown() || errorBar(), 15000);   // 等它开始生成（或报错），再进入下一轮判断
-      await waitFor(() => convKey(), 5000);
-      if (!st.path) { st.path = convKey(); save(); }
     } catch (err) {
       st.paused = true; st.halt = err.message; save();
       if (composerText().trim() === item.text.trim()) clearComposer();
@@ -213,7 +236,6 @@
   const esc = (s) => s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
   function statusText() {
-    if (mismatch) return '不在本对话';
     if (st.paused) return st.halt ? '出错暂停' : '已暂停';
     if (sending) return '发送中…';
     if (!st.items.length) return '空';
@@ -233,8 +255,6 @@
       ${n ? `<button data-a="pause">${st.paused ? '▶ 继续' : '⏸ 暂停'}</button>` : ''}
       <button data-a="min" title="${minimized ? '展开' : '收起'}">${minimized ? '▴' : '▾'}</button></div>`;
     if (!minimized) {
-      if (mismatch) h += `<div class="warn">这个队列是在另一个对话里攒的，当前对话不会自动发。
-        <button data-a="adopt">改发到当前对话</button></div>`;
       if (st.paused && st.halt) h += `<div class="warn">⚠ ${esc(st.halt)}。队列已暂停，看一眼对话，处理好后点 ▶ 继续。</div>`;
       h += `<div class="list">${n ? st.items.map((it, i) => `
         <div class="it" data-id="${it.id}"><span class="n">${i + 1}</span><span class="tx">${it.failed ? '<b title="上次发出去没收到回复">⚠</b> ' : ''}${esc(it.text)}</span>
@@ -261,7 +281,6 @@
     else if (a === 'min') { minimized = !minimized; sessionStorage.setItem('cgq-min', minimized ? '1' : '0'); render(); }
     else if (a === 'add') enqueueComposer();
     else if (a === 'clear') { if (confirm(`清空队列里的 ${st.items.length} 条？`)) { st.items = []; save(); } }
-    else if (a === 'adopt') { st.path = convKey(); save(); }
     else if (a === 'del') { st.items.splice(idx, 1); save(); }
     else if (a === 'up' && idx > 0) { [st.items[idx - 1], st.items[idx]] = [st.items[idx], st.items[idx - 1]]; save(); }
     else if (a === 'edit') startEdit(idx);

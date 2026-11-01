@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "ChatGPT Prompt Queue",
-  "version": "0.1.3",
+  "version": "0.2.0",
   "description": "ChatGPT 网页版排队发送（prompt queue）：提前排好后面几轮要发的消息，上一轮回复完整生成后自动发下一条。",
   "content_scripts": [
     {
