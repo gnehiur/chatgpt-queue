@@ -80,8 +80,11 @@
   // 用户点 ▶ 继续时，把当时已有的出错条记下来，不再拦。
   // （按文字记：ChatGPT 重绘出错条会换新节点。下一条成功发出去后清掉，同样的错再出现照样拦）
   // 每轮开头有个读屏用的隐藏标题「你说：」/「ChatGPT 说：」，拿最后一个判断最后一轮是谁说的
+  // 切对话后旧对话整块 <main> 也可能还留在页面里（宽高为 0），只看输入框所在的那块
+  const curMain = () => composer()?.closest('main') ||
+    [...document.querySelectorAll('main')].find(m => m.getBoundingClientRect().width > 0) || document.querySelector('main');
   const lastHead = () => {
-    const hs = [...document.querySelectorAll('main h4')].filter(h => /说：|said:/i.test(h.textContent));
+    const hs = [...(curMain()?.querySelectorAll('h4') || [])].filter(h => /说：|said:/i.test(h.textContent));
     return hs[hs.length - 1] || null;
   };
   const lastTurn = () => {
@@ -92,7 +95,7 @@
   // 只看最后一轮之后的出错条，历史里留着的旧出错条不算
   const alerts = () => {
     const h = lastHead();
-    return [...document.querySelectorAll('main [role=alert]')].filter(e => e.offsetParent !== null && e.innerText.trim() &&
+    return [...(curMain()?.querySelectorAll('[role=alert]') || [])].filter(e => e.offsetParent !== null && e.innerText.trim() &&
       (!h || h.compareDocumentPosition(e) & Node.DOCUMENT_POSITION_FOLLOWING));
   };
   const errorBar = () => alerts().find(e => !ackedErr.has(e.innerText.trim()));
