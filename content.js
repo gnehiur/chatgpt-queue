@@ -197,7 +197,10 @@
   };
 
   // ---------- 面板 ----------
+  // 对话栏加宽：ChatGPT 用 Tailwind 任意属性类 [--thread-content-max-width:…] 把对话和输入框限在约 48rem（808px），
+  // 这里在同样带这个类的元素上把变量改成「容器宽度减 64px，最多 1600px」。ChatGPT 改了类名就会失效，但不会出错。
   const css = `
+  [class*="[--thread-content-max-width:"]{--thread-content-max-width:min(1600px, calc(100cqw - 64px)) !important}
   #cgq{position:fixed;right:16px;bottom:96px;z-index:2147483000;width:320px;max-height:55vh;display:flex;flex-direction:column;
     font:13px/1.45 -apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif;color:#1f1f1f;background:#fff;border:1px solid #e3e3e3;
     border-radius:12px;box-shadow:0 6px 24px rgba(0,0,0,.12);overflow:hidden}
